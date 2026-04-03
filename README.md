@@ -4,8 +4,25 @@ Automate symlinking gitignored config files (`.env`, IDE settings, local overrid
 
 ## Install
 
+### From npm
+
 ```bash
 npm install -g worktree-link
+```
+
+### From source
+
+```bash
+git clone https://github.com/Shaun-Sheppard/worktree-link.git
+cd worktree-link
+npm install
+npm link
+```
+
+### Directly from GitHub
+
+```bash
+npm install -g github:Shaun-Sheppard/worktree-link
 ```
 
 ## Usage
