@@ -9,12 +9,13 @@ import inquirer from "inquirer";
 const VERSION = "1.0.0";
 
 function parseArgs(args) {
-  const flags = { yes: false, dryRun: false, version: false, help: false };
+  const flags = { yes: false, dryRun: false, version: false, help: false, verbose: false };
   for (const arg of args) {
     if (arg === "--yes" || arg === "-y") flags.yes = true;
     else if (arg === "--dry-run") flags.dryRun = true;
     else if (arg === "--version") flags.version = true;
     else if (arg === "--help" || arg === "-h") flags.help = true;
+    else if (arg === "--verbose" || arg === "-v") flags.verbose = true;
   }
   return flags;
 }
@@ -29,6 +30,7 @@ ${chalk.bold("USAGE")}
 ${chalk.bold("OPTIONS")}
   --yes, -y     Skip all confirmation prompts (select all worktrees and files)
   --dry-run     Show what would be symlinked without creating anything
+  --verbose, -v Show detailed discovery info for debugging
   --version     Print the version number
   --help, -h    Print this help message
 
@@ -103,32 +105,58 @@ function shouldExclude(filePath) {
   return false;
 }
 
-function discoverIgnoredFiles(mainWorktree) {
+function discoverIgnoredFiles(mainWorktree, verbose) {
   let raw;
   try {
     raw = exec(
       "git ls-files --others --ignored --exclude-standard",
       mainWorktree,
     );
-  } catch {
+  } catch (err) {
+    console.error(
+      chalk.red(`Error listing ignored files in ${mainWorktree}: ${err.message}`),
+    );
     return [];
   }
 
-  if (!raw) return [];
+  if (!raw) {
+    if (verbose) {
+      console.log(chalk.dim("  git ls-files returned no output."));
+    }
+    return [];
+  }
 
-  return raw
-    .split("\n")
-    .filter((f) => f.length > 0)
-    .filter((f) => {
-      const fullPath = path.join(mainWorktree, f);
-      try {
-        const stat = fs.statSync(fullPath);
-        return stat.isFile();
-      } catch {
-        return false;
-      }
-    })
-    .filter((f) => !shouldExclude(f));
+  const allFiles = raw.split("\n").filter((f) => f.length > 0);
+
+  if (verbose) {
+    console.log(chalk.dim(`  git ls-files found ${allFiles.length} ignored path(s)`));
+  }
+
+  const files = allFiles.filter((f) => {
+    const fullPath = path.join(mainWorktree, f);
+    try {
+      const stat = fs.statSync(fullPath);
+      return stat.isFile();
+    } catch {
+      return false;
+    }
+  });
+
+  if (verbose && files.length !== allFiles.length) {
+    console.log(chalk.dim(`  ${allFiles.length - files.length} path(s) filtered out (directories or inaccessible)`));
+  }
+
+  const result = files.filter((f) => !shouldExclude(f));
+
+  if (verbose && result.length !== files.length) {
+    const excluded = files.filter((f) => shouldExclude(f));
+    console.log(chalk.dim(`  ${excluded.length} file(s) excluded by filter:`));
+    for (const f of excluded) {
+      console.log(chalk.dim(`    - ${f}`));
+    }
+  }
+
+  return result;
 }
 
 async function run() {
@@ -206,7 +234,7 @@ async function run() {
   }
 
   // Discover gitignored files
-  const files = discoverIgnoredFiles(mainWorktree.path);
+  const files = discoverIgnoredFiles(mainWorktree.path, flags.verbose);
 
   if (files.length === 0) {
     console.log(
