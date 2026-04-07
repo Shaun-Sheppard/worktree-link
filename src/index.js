@@ -10,13 +10,18 @@ const VERSION = "2.0.0";
 const CONFIG_FILENAME = ".worktree-link.json";
 
 function parseArgs(args) {
-  const flags = { yes: false, dryRun: false, version: false, help: false, init: false };
-  for (const arg of args) {
+  const flags = { yes: false, dryRun: false, version: false, help: false, init: false, target: null };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--yes" || arg === "-y") flags.yes = true;
     else if (arg === "--dry-run") flags.dryRun = true;
     else if (arg === "--version") flags.version = true;
     else if (arg === "--help" || arg === "-h") flags.help = true;
     else if (arg === "--init") flags.init = true;
+    else if (arg === "--target" || arg === "-t") {
+      flags.target = args[++i];
+      flags.yes = true;
+    }
   }
   return flags;
 }
@@ -29,11 +34,12 @@ ${chalk.bold("USAGE")}
   worktree-link [options]
 
 ${chalk.bold("OPTIONS")}
-  --yes, -y     Skip all confirmation prompts (select all worktrees)
-  --dry-run     Show what would be done without making changes
-  --init        Create a sample ${CONFIG_FILENAME} in the current directory
-  --version     Print the version number
-  --help, -h    Print this help message
+  --yes, -y          Skip all confirmation prompts (select all worktrees)
+  --target, -t PATH  Target a specific worktree by path (implies --yes)
+  --dry-run          Show what would be done without making changes
+  --init             Create a sample ${CONFIG_FILENAME} in the current directory
+  --version          Print the version number
+  --help, -h         Print this help message
 
 ${chalk.bold("CONFIG")}
   Place a ${chalk.cyan(CONFIG_FILENAME)} file in your repo root:
@@ -52,6 +58,7 @@ ${chalk.bold("EXAMPLES")}
   worktree-link --yes         Auto-run for all worktrees, no prompts
   worktree-link --dry-run     Preview what would happen
   worktree-link -y --dry-run  Preview for all worktrees
+  worktree-link -t /path/to/worktree  Target a specific worktree
 `);
 }
 
@@ -210,7 +217,19 @@ async function run() {
 
   // Select target worktrees
   let selectedWorktrees;
-  if (flags.yes) {
+  if (flags.target) {
+    const targetPath = path.resolve(flags.target);
+    const match = otherWorktrees.find((w) => w.path === targetPath);
+    if (!match) {
+      console.error(chalk.red(`Error: Worktree not found: ${targetPath}`));
+      console.error(chalk.dim("Available worktrees:"));
+      for (const w of otherWorktrees) {
+        console.error(chalk.dim(`  ${w.path}`));
+      }
+      process.exit(1);
+    }
+    selectedWorktrees = [match];
+  } else if (flags.yes) {
     selectedWorktrees = otherWorktrees;
   } else {
     const { targets } = await inquirer.prompt([
