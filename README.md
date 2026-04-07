@@ -1,6 +1,6 @@
 # worktree-link
 
-Automate symlinking gitignored config files (`.env`, IDE settings, local overrides, etc.) from your main worktree into git worktrees.
+Symlink config files and run setup commands in git worktrees, driven by a simple JSON config.
 
 ## Install
 
@@ -25,54 +25,96 @@ npm link
 npm install -g github:Shaun-Sheppard/worktree-link
 ```
 
-## Usage
+## Quick start
 
-Run from anywhere inside a git project that has worktrees:
+1. Create a config file in your repo root:
+
+```bash
+worktree-link --init
+```
+
+This creates `.worktree-link.json`:
+
+```json
+{
+  "files": [".env", ".env.local"],
+  "commands": ["npm install"]
+}
+```
+
+2. Edit it to list your config files and setup commands.
+
+3. Run from anywhere inside the project:
 
 ```bash
 worktree-link
 ```
 
-This will:
+## Config
 
-1. Discover all git worktrees in the current project
-2. Identify the main worktree
-3. Find all gitignored files on disk in the main worktree
-4. Filter out common noise (`node_modules`, `dist`, `build`, `coverage`, `*.log`, etc.)
-5. Let you pick which worktrees to target
-6. Show the files and ask for confirmation
-7. Create symlinks in the selected worktrees, preserving directory structure
+Place a `.worktree-link.json` file in your repo root with two optional keys:
 
-### Flags
+| Key | Description |
+|---|---|
+| `files` | Array of file paths (relative to repo root) to symlink from the main worktree into target worktrees |
+| `commands` | Array of shell commands to run in each target worktree after linking |
+
+### Example
+
+```json
+{
+  "files": [
+    ".env",
+    ".env.local",
+    "src/appsettings.Development.json"
+  ],
+  "commands": [
+    "npm install",
+    "dotnet restore"
+  ]
+}
+```
+
+- **files** are symlinked (not copied), so changes in the main worktree are reflected everywhere.
+- **commands** run in each target worktree after symlinking, useful for restoring dependencies.
+
+## Flags
 
 | Flag | Description |
-| ----------- | ----------------------------------------------------------------- |
-| `--yes, -y` | Skip all prompts — select all worktrees and symlink all files |
-| `--dry-run` | Show what would be symlinked without creating anything |
+|---|---|
+| `--yes, -y` | Skip all prompts — select all worktrees and proceed |
+| `--dry-run` | Show what would be done without making changes |
+| `--init` | Create a sample `.worktree-link.json` in the repo root |
 | `--version` | Print the version number |
-| `--help, -h`| Print usage instructions |
+| `--help, -h` | Print usage instructions |
 
-### Examples
+## Examples
 
-**Interactive mode** — choose worktrees and confirm files:
+**Create config:**
+
+```bash
+worktree-link --init
+```
+
+**Interactive mode** — choose worktrees and confirm:
 
 ```bash
 worktree-link
 ```
 
-**Auto mode** — symlink everything, no prompts:
+**Auto mode** — no prompts:
 
 ```bash
 worktree-link --yes
 ```
 
-**Preview mode** — see what would happen without making changes:
+**Preview mode** — see what would happen:
 
 ```bash
 worktree-link --dry-run
 ```
 
-**Combine flags** — preview all files to all worktrees:
+**Combine flags:**
 
 ```bash
 worktree-link -y --dry-run
@@ -80,11 +122,13 @@ worktree-link -y --dry-run
 
 ## How it works
 
-- Uses `git worktree list --porcelain` to discover worktrees
-- Uses `git ls-files --others --ignored --exclude-standard` to find gitignored files
-- Creates symlinks pointing from each target worktree back to the main worktree
-- Skips files that already have a symlink in the target (with a warning)
-- Works on macOS and Linux
+1. Discovers all worktrees via `git worktree list --porcelain`
+2. Reads `.worktree-link.json` from the main worktree
+3. Validates that listed files exist in the main worktree
+4. Creates symlinks in selected target worktrees, preserving directory structure
+5. Runs configured commands in each target worktree
+6. Skips files that already have a symlink (with a warning)
+7. Works on macOS and Linux
 
 ## License
 

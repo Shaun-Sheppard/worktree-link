@@ -6,44 +6,61 @@ import path from "node:path";
 import chalk from "chalk";
 import inquirer from "inquirer";
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
+const CONFIG_FILENAME = ".worktree-link.json";
 
 function parseArgs(args) {
-  const flags = { yes: false, dryRun: false, version: false, help: false, verbose: false };
+  const flags = { yes: false, dryRun: false, version: false, help: false, init: false };
   for (const arg of args) {
     if (arg === "--yes" || arg === "-y") flags.yes = true;
     else if (arg === "--dry-run") flags.dryRun = true;
     else if (arg === "--version") flags.version = true;
     else if (arg === "--help" || arg === "-h") flags.help = true;
-    else if (arg === "--verbose" || arg === "-v") flags.verbose = true;
+    else if (arg === "--init") flags.init = true;
   }
   return flags;
 }
 
 function printHelp() {
   console.log(`
-${chalk.bold("worktree-link")} — Symlink gitignored config files into git worktrees
+${chalk.bold("worktree-link")} — Symlink config files and run setup commands in git worktrees
 
 ${chalk.bold("USAGE")}
   worktree-link [options]
 
 ${chalk.bold("OPTIONS")}
-  --yes, -y     Skip all confirmation prompts (select all worktrees and files)
-  --dry-run     Show what would be symlinked without creating anything
-  --verbose, -v Show detailed discovery info for debugging
+  --yes, -y     Skip all confirmation prompts (select all worktrees)
+  --dry-run     Show what would be done without making changes
+  --init        Create a sample ${CONFIG_FILENAME} in the current directory
   --version     Print the version number
   --help, -h    Print this help message
 
+${chalk.bold("CONFIG")}
+  Place a ${chalk.cyan(CONFIG_FILENAME)} file in your repo root:
+
+  {
+    "files": [".env", ".env.local"],
+    "commands": ["npm install"]
+  }
+
+  ${chalk.bold("files")}     — Files to symlink from the main worktree into targets
+  ${chalk.bold("commands")}  — Commands to run in each target worktree after linking
+
 ${chalk.bold("EXAMPLES")}
-  worktree-link                 Interactive mode
-  worktree-link --yes           Auto-symlink all files to all worktrees
-  worktree-link --dry-run       Preview what would be symlinked
-  worktree-link -y --dry-run    Preview all files to all worktrees
+  worktree-link --init        Create a sample config file
+  worktree-link               Interactive mode
+  worktree-link --yes         Auto-run for all worktrees, no prompts
+  worktree-link --dry-run     Preview what would happen
+  worktree-link -y --dry-run  Preview for all worktrees
 `);
 }
 
 function exec(cmd, cwd) {
   return execSync(cmd, { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+
+function execPassthrough(cmd, cwd) {
+  execSync(cmd, { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
 }
 
 function findGitRoot() {
@@ -78,85 +95,45 @@ function discoverWorktrees() {
   return parseWorktrees(raw);
 }
 
-const EXCLUDE_DIRS = new Set([
-  "node_modules",
-  "bin",
-  "obj",
-  ".vs",
-  ".idea",
-  "dist",
-  "build",
-  "coverage",
-]);
-
-const EXCLUDE_FILES = new Set([".DS_Store"]);
-
-function shouldExclude(filePath) {
-  const parts = filePath.split(path.posix.sep);
-
-  for (const part of parts) {
-    if (EXCLUDE_DIRS.has(part)) return true;
+function loadConfig(mainWorktreePath) {
+  const configPath = path.join(mainWorktreePath, CONFIG_FILENAME);
+  if (!fs.existsSync(configPath)) {
+    return null;
   }
-
-  const basename = path.posix.basename(filePath);
-  if (EXCLUDE_FILES.has(basename)) return true;
-  if (basename.endsWith(".log")) return true;
-
-  return false;
+  const raw = fs.readFileSync(configPath, "utf-8");
+  const config = JSON.parse(raw);
+  return {
+    files: Array.isArray(config.files) ? config.files : [],
+    commands: Array.isArray(config.commands) ? config.commands : [],
+  };
 }
 
-function discoverIgnoredFiles(mainWorktree, verbose) {
-  let raw;
-  try {
-    raw = exec(
-      "git ls-files --others --ignored --exclude-standard",
-      mainWorktree,
-    );
-  } catch (err) {
-    console.error(
-      chalk.red(`Error listing ignored files in ${mainWorktree}: ${err.message}`),
-    );
-    return [];
-  }
-
-  if (!raw) {
-    if (verbose) {
-      console.log(chalk.dim("  git ls-files returned no output."));
-    }
-    return [];
-  }
-
-  const allFiles = raw.split("\n").filter((f) => f.length > 0);
-
-  if (verbose) {
-    console.log(chalk.dim(`  git ls-files found ${allFiles.length} ignored path(s)`));
-  }
-
-  const files = allFiles.filter((f) => {
-    const fullPath = path.join(mainWorktree, f);
-    try {
-      const stat = fs.statSync(fullPath);
-      return stat.isFile();
-    } catch {
-      return false;
-    }
-  });
-
-  if (verbose && files.length !== allFiles.length) {
-    console.log(chalk.dim(`  ${allFiles.length - files.length} path(s) filtered out (directories or inaccessible)`));
-  }
-
-  const result = files.filter((f) => !shouldExclude(f));
-
-  if (verbose && result.length !== files.length) {
-    const excluded = files.filter((f) => shouldExclude(f));
-    console.log(chalk.dim(`  ${excluded.length} file(s) excluded by filter:`));
-    for (const f of excluded) {
-      console.log(chalk.dim(`    - ${f}`));
+function validateFiles(mainWorktreePath, files) {
+  const valid = [];
+  const missing = [];
+  for (const f of files) {
+    const fullPath = path.join(mainWorktreePath, f);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      valid.push(f);
+    } else {
+      missing.push(f);
     }
   }
+  return { valid, missing };
+}
 
-  return result;
+function createSampleConfig(dir) {
+  const configPath = path.join(dir, CONFIG_FILENAME);
+  if (fs.existsSync(configPath)) {
+    console.log(chalk.yellow(`${CONFIG_FILENAME} already exists.`));
+    return;
+  }
+  const sample = {
+    files: [".env", ".env.local"],
+    commands: ["npm install"],
+  };
+  fs.writeFileSync(configPath, JSON.stringify(sample, null, 2) + "\n");
+  console.log(chalk.green(`Created ${CONFIG_FILENAME}`));
 }
 
 async function run() {
@@ -179,6 +156,11 @@ async function run() {
     process.exit(1);
   }
 
+  if (flags.init) {
+    createSampleConfig(gitRoot);
+    process.exit(0);
+  }
+
   // Discover worktrees
   let worktrees;
   try {
@@ -198,9 +180,22 @@ async function run() {
   const otherWorktrees = worktrees.slice(1);
 
   if (otherWorktrees.length === 0) {
+    console.error(chalk.yellow("No additional worktrees found — nothing to do."));
+    process.exit(0);
+  }
+
+  // Load config
+  const config = loadConfig(mainWorktree.path);
+  if (!config) {
     console.error(
-      chalk.yellow("No additional worktrees found — nothing to do."),
+      chalk.red(`Error: No ${CONFIG_FILENAME} found in ${mainWorktree.path}`),
     );
+    console.error(chalk.dim(`Run ${chalk.cyan("worktree-link --init")} to create one.`));
+    process.exit(1);
+  }
+
+  if (config.files.length === 0 && config.commands.length === 0) {
+    console.log(chalk.yellow(`${CONFIG_FILENAME} has no files or commands configured.`));
     process.exit(0);
   }
 
@@ -233,22 +228,30 @@ async function run() {
     selectedWorktrees = targets;
   }
 
-  // Discover gitignored files
-  const files = discoverIgnoredFiles(mainWorktree.path, flags.verbose);
+  // Validate configured files
+  const { valid: files, missing } = validateFiles(mainWorktree.path, config.files);
 
-  if (files.length === 0) {
-    console.log(
-      chalk.yellow("No gitignored config files found in main worktree."),
-    );
-    process.exit(0);
+  if (missing.length > 0) {
+    for (const f of missing) {
+      console.log(chalk.yellow(`  ⚠ File not found in main worktree: ${f}`));
+    }
   }
 
-  console.log(
-    chalk.bold(`\nDiscovered ${files.length} gitignored file(s):\n`),
-  );
-  for (const f of files) {
-    console.log(`  ${f}`);
+  // Show plan
+  if (files.length > 0) {
+    console.log(chalk.bold(`\nFiles to symlink (${files.length}):\n`));
+    for (const f of files) {
+      console.log(`  ${f}`);
+    }
   }
+
+  if (config.commands.length > 0) {
+    console.log(chalk.bold(`\nCommands to run (${config.commands.length}):\n`));
+    for (const cmd of config.commands) {
+      console.log(`  ${cmd}`);
+    }
+  }
+
   console.log();
 
   // Confirm
@@ -257,7 +260,7 @@ async function run() {
       {
         type: "confirm",
         name: "proceed",
-        message: `Symlink these ${files.length} file(s) into ${selectedWorktrees.length} worktree(s)?`,
+        message: `Proceed with ${selectedWorktrees.length} worktree(s)?`,
         default: true,
       },
     ]);
@@ -267,14 +270,17 @@ async function run() {
     }
   }
 
-  // Create symlinks
-  let created = 0;
-  let skipped = 0;
-  let failed = 0;
+  // Process each worktree
+  let linkedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let commandsRun = 0;
+  let commandsFailed = 0;
 
   for (const wt of selectedWorktrees) {
     console.log(chalk.bold(`\n→ ${wt.path}`));
 
+    // Symlink files
     for (const relFile of files) {
       const source = path.join(mainWorktree.path, relFile);
       const target = path.join(wt.path, relFile);
@@ -284,14 +290,11 @@ async function run() {
         const lstat = fs.lstatSync(target);
         if (lstat.isSymbolicLink()) {
           console.log(chalk.yellow(`  ⚠ SKIP (already symlinked): ${relFile}`));
-          skipped++;
+          skippedCount++;
           continue;
         }
-        // A real file exists — skip to avoid overwriting
-        console.log(
-          chalk.yellow(`  ⚠ SKIP (file already exists): ${relFile}`),
-        );
-        skipped++;
+        console.log(chalk.yellow(`  ⚠ SKIP (file already exists): ${relFile}`));
+        skippedCount++;
         continue;
       } catch {
         // File doesn't exist — good, we'll create the symlink
@@ -299,31 +302,55 @@ async function run() {
 
       if (flags.dryRun) {
         console.log(chalk.cyan(`  [dry-run] would symlink: ${relFile}`));
-        created++;
+        linkedCount++;
         continue;
       }
 
       try {
-        // Ensure parent directory exists
         const targetDir = path.dirname(target);
         fs.mkdirSync(targetDir, { recursive: true });
-
         fs.symlinkSync(source, target);
         console.log(chalk.green(`  ✓ ${relFile}`));
-        created++;
+        linkedCount++;
       } catch (err) {
         console.error(chalk.red(`  ✗ ${relFile}: ${err.message}`));
-        failed++;
+        failedCount++;
+      }
+    }
+
+    // Run commands
+    for (const cmd of config.commands) {
+      if (flags.dryRun) {
+        console.log(chalk.cyan(`  [dry-run] would run: ${cmd}`));
+        commandsRun++;
+        continue;
+      }
+
+      try {
+        console.log(chalk.dim(`  Running: ${cmd}`));
+        execPassthrough(cmd, wt.path);
+        console.log(chalk.green(`  ✓ ${cmd}`));
+        commandsRun++;
+      } catch (err) {
+        console.error(chalk.red(`  ✗ ${cmd}: ${err.message}`));
+        commandsFailed++;
       }
     }
   }
 
   // Summary
   console.log(chalk.bold("\n— Summary —"));
-  const prefix = flags.dryRun ? "Would create" : "Created";
-  console.log(chalk.green(`  ${prefix}: ${created}`));
-  if (skipped > 0) console.log(chalk.yellow(`  Skipped: ${skipped}`));
-  if (failed > 0) console.log(chalk.red(`  Failed: ${failed}`));
+  const prefix = flags.dryRun ? "Would symlink" : "Symlinked";
+  const cmdPrefix = flags.dryRun ? "Would run" : "Commands run";
+  if (files.length > 0) {
+    console.log(chalk.green(`  ${prefix}: ${linkedCount}`));
+    if (skippedCount > 0) console.log(chalk.yellow(`  Skipped: ${skippedCount}`));
+    if (failedCount > 0) console.log(chalk.red(`  Failed: ${failedCount}`));
+  }
+  if (config.commands.length > 0) {
+    console.log(chalk.green(`  ${cmdPrefix}: ${commandsRun}`));
+    if (commandsFailed > 0) console.log(chalk.red(`  Commands failed: ${commandsFailed}`));
+  }
 }
 
 run().catch((err) => {
