@@ -1,7 +1,7 @@
 {
   "name": "worktree-link",
-  "version": "1.0.0",
-  "description": "Automate symlinking gitignored config files into git worktrees",
+  "version": "2.0.0",
+  "description": "Symlink config files and run setup commands in git worktrees",
   "main": "src/index.js",
   "bin": {
     "worktree-link": "./src/index.js"
