@@ -52,9 +52,14 @@ ${chalk.bold("CONFIG")}
   ${chalk.bold("files")}     — Files to symlink from the main worktree into targets
   ${chalk.bold("commands")}  — Commands to run in each target worktree after linking
 
+${chalk.bold("BEHAVIOUR")}
+  When run from inside a linked worktree, automatically targets that
+  worktree only. When run from the main worktree, prompts to select
+  target worktrees (or uses all with --yes).
+
 ${chalk.bold("EXAMPLES")}
   worktree-link --init        Create a sample config file
-  worktree-link               Interactive mode
+  worktree-link               Interactive mode (or auto if inside a worktree)
   worktree-link --yes         Auto-run for all worktrees, no prompts
   worktree-link --dry-run     Preview what would happen
   worktree-link -y --dry-run  Preview for all worktrees
@@ -75,6 +80,26 @@ function findGitRoot() {
     return exec("git rev-parse --show-toplevel");
   } catch {
     return null;
+  }
+}
+
+function getCurrentWorktreePath() {
+  try {
+    return exec("git rev-parse --show-toplevel");
+  } catch {
+    return null;
+  }
+}
+
+function isInsideLinkedWorktree() {
+  try {
+    const gitDir = exec("git rev-parse --git-dir");
+    const commonDir = exec("git rev-parse --git-common-dir");
+    // In a linked worktree, git-dir is something like ../.git/worktrees/<name>
+    // while git-common-dir points to the main .git directory
+    return path.resolve(gitDir) !== path.resolve(commonDir);
+  } catch {
+    return false;
   }
 }
 
@@ -209,14 +234,11 @@ async function run() {
 
   console.log(chalk.dim(`worktree-link v${VERSION}`));
   console.log(chalk.bold("Main worktree:"), mainWorktree.path);
-  console.log(
-    chalk.bold("Additional worktrees:"),
-    otherWorktrees.map((w) => w.path).join(", "),
-  );
-  console.log();
 
-  // Select target worktrees
+  // Auto-detect if running inside a linked worktree
+  const insideLinkedWorktree = isInsideLinkedWorktree();
   let selectedWorktrees;
+
   if (flags.target) {
     const targetPath = path.resolve(flags.target);
     const match = otherWorktrees.find((w) => w.path === targetPath);
@@ -229,24 +251,42 @@ async function run() {
       process.exit(1);
     }
     selectedWorktrees = [match];
-  } else if (flags.yes) {
-    selectedWorktrees = otherWorktrees;
+  } else if (insideLinkedWorktree) {
+    const currentPath = getCurrentWorktreePath();
+    const match = otherWorktrees.find((w) => w.path === currentPath);
+    if (!match) {
+      console.error(chalk.red("Error: Could not match current worktree."));
+      process.exit(1);
+    }
+    selectedWorktrees = [match];
+    console.log(chalk.bold("Detected worktree:"), currentPath);
+    console.log(chalk.dim("Running inside a linked worktree — auto-targeting it."));
   } else {
-    const { targets } = await inquirer.prompt([
-      {
-        type: "checkbox",
-        name: "targets",
-        message: "Select target worktrees:",
-        choices: otherWorktrees.map((w) => ({
-          name: w.path + (w.branch ? ` (${w.branch})` : ""),
-          value: w,
-          checked: true,
-        })),
-        validate: (answer) =>
-          answer.length > 0 || "You must select at least one worktree.",
-      },
-    ]);
-    selectedWorktrees = targets;
+    console.log(
+      chalk.bold("Additional worktrees:"),
+      otherWorktrees.map((w) => w.path).join(", "),
+    );
+    console.log();
+
+    if (flags.yes) {
+      selectedWorktrees = otherWorktrees;
+    } else {
+      const { targets } = await inquirer.prompt([
+        {
+          type: "checkbox",
+          name: "targets",
+          message: "Select target worktrees:",
+          choices: otherWorktrees.map((w) => ({
+            name: w.path + (w.branch ? ` (${w.branch})` : ""),
+            value: w,
+            checked: true,
+          })),
+          validate: (answer) =>
+            answer.length > 0 || "You must select at least one worktree.",
+        },
+      ]);
+      selectedWorktrees = targets;
+    }
   }
 
   // Validate configured files
