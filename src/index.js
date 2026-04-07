@@ -157,6 +157,7 @@ async function run() {
   }
 
   if (flags.init) {
+    console.log(chalk.dim(`worktree-link v${VERSION}`));
     createSampleConfig(gitRoot);
     process.exit(0);
   }
@@ -199,6 +200,7 @@ async function run() {
     process.exit(0);
   }
 
+  console.log(chalk.dim(`worktree-link v${VERSION}`));
   console.log(chalk.bold("Main worktree:"), mainWorktree.path);
   console.log(
     chalk.bold("Additional worktrees:"),
